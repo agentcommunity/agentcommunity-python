@@ -11,6 +11,7 @@ from pydantic import BaseModel, ValidationError
 
 from agentcommunity._transport import _ClientFactory, _MCPTransport
 from agentcommunity.errors import AgentCommunityProtocolError, AgentCommunityToolError
+from agentcommunity.models import CertificateVerification, CommunityStats, MemberLookup
 
 _DEFAULT_ENDPOINT = "https://agentcommunity.org/mcp"
 _DEFAULT_TIMEOUT = 15.0
@@ -59,6 +60,28 @@ class AgentCommunityClient:
 
     async def close(self) -> None:
         await self._transport.close()
+
+    async def community_stats(self) -> CommunityStats:
+        return await self._call_typed("get_community_stats", {}, CommunityStats)
+
+    async def lookup_member(self, query: str) -> MemberLookup:
+        if not isinstance(query, str):
+            raise ValueError("query must be a string")
+        normalized_query = query.strip()
+        if not 1 <= len(normalized_query) <= 200:
+            raise ValueError("query must contain between 1 and 200 characters")
+        return await self._call_typed(
+            "lookup_member", {"query": normalized_query}, MemberLookup
+        )
+
+    async def verify_certificate(self, certificate_id: str) -> CertificateVerification:
+        if not isinstance(certificate_id, str):
+            raise ValueError("certificate_id must be a string")
+        return await self._call_typed(
+            "verify_certificate",
+            {"certificate_id": certificate_id},
+            CertificateVerification,
+        )
 
     async def _call_typed(
         self,

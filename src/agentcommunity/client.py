@@ -44,8 +44,6 @@ class AgentCommunityClient:
         return self._timeout
 
     async def __aenter__(self) -> AgentCommunityClient:
-        if self._transport.active:
-            raise AgentCommunityProtocolError("Client context is already active")
         await self._transport.connect()
         return self
 
@@ -138,8 +136,33 @@ def _validate_timeout(timeout: float) -> float:
 
 
 def _safe_tool_error_text(content: list[Any]) -> str:
-    text_parts = [item.text for item in content if isinstance(item, TextContent)]
-    normalized = " ".join(" ".join(text_parts).split())
-    if len(normalized) <= _MAX_TOOL_ERROR_TEXT:
-        return normalized
-    return f"{normalized[: _MAX_TOOL_ERROR_TEXT - 3]}..."
+    output: list[str] = []
+    pending_space = False
+    truncated = False
+    for item in content:
+        if not isinstance(item, TextContent):
+            continue
+        if output:
+            pending_space = True
+        for character in item.text:
+            codepoint = ord(character)
+            if character.isspace() or codepoint <= 31 or 127 <= codepoint <= 159:
+                if output:
+                    pending_space = True
+                continue
+            if pending_space:
+                if len(output) == _MAX_TOOL_ERROR_TEXT:
+                    truncated = True
+                    break
+                output.append(" ")
+                pending_space = False
+            if len(output) == _MAX_TOOL_ERROR_TEXT:
+                truncated = True
+                break
+            output.append(character)
+        if truncated:
+            break
+    diagnostic = "".join(output)
+    if truncated:
+        return f"{diagnostic[: _MAX_TOOL_ERROR_TEXT - 3]}..."
+    return diagnostic

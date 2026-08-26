@@ -134,6 +134,36 @@ async def test_reentering_active_client_fails_predictably() -> None:
 
 
 @pytest.mark.anyio
+async def test_simultaneous_entry_cannot_open_two_clients() -> None:
+    fake = FakeMCPClient()
+    fake.connect_gate = asyncio.Event()
+    factory = RecordingClientFactory(lambda: fake)
+    client = AgentCommunityClient(_client_factory=factory)
+    entered = asyncio.Event()
+    close_owner = asyncio.Event()
+
+    async def own_lifecycle() -> None:
+        await client.__aenter__()
+        entered.set()
+        await close_owner.wait()
+        await client.close()
+
+    owner = asyncio.create_task(own_lifecycle())
+    while fake.enter_count == 0:
+        await asyncio.sleep(0)
+
+    with pytest.raises(AgentCommunityProtocolError, match="connect"):
+        await client.__aenter__()
+
+    fake.connect_gate.set()
+    await entered.wait()
+    assert len(factory.clients) == 1
+    close_owner.set()
+    await owner
+    assert fake.successful_exit_count == 1
+
+
+@pytest.mark.anyio
 async def test_close_is_idempotent_before_and_after_context_exit() -> None:
     factory = RecordingClientFactory()
     client = AgentCommunityClient(_client_factory=factory)
@@ -179,6 +209,8 @@ async def test_close_failure_retains_connection_for_successful_retry() -> None:
     with pytest.raises(AgentCommunityTransportError) as captured:
         await client.close()
     assert captured.value.__cause__ is upstream
+    with pytest.raises(AgentCommunityProtocolError, match="failed close"):
+        await client._call_typed("get_community_stats", {}, CommunityStats)
 
     fake.close_error = None
     await client.close()
@@ -193,20 +225,96 @@ async def test_close_cancellation_retains_connection_for_successful_retry() -> N
     fake = FakeMCPClient()
     fake.close_gate = asyncio.Event()
     client = AgentCommunityClient(_client_factory=RecordingClientFactory(lambda: fake))
-    await client.__aenter__()
+    entered = asyncio.Event()
+    begin_close = asyncio.Event()
+    retry_close = asyncio.Event()
+    cancellation_seen = asyncio.Event()
 
-    task = asyncio.create_task(client.close())
-    await asyncio.sleep(0)
+    async def own_lifecycle() -> None:
+        await client.__aenter__()
+        entered.set()
+        await begin_close.wait()
+        try:
+            await client.close()
+        except asyncio.CancelledError:
+            cancellation_seen.set()
+        await retry_close.wait()
+        await client.close()
+
+    task = asyncio.create_task(own_lifecycle())
+    await entered.wait()
+    begin_close.set()
+    while fake.exit_count == 0:
+        await asyncio.sleep(0)
     task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
+    await cancellation_seen.wait()
 
     fake.close_gate.set()
-    await client.close()
-    await client.close()
+    retry_close.set()
+    await task
 
     assert fake.exit_count == 2
     assert fake.successful_exit_count == 1
+
+
+@pytest.mark.anyio
+async def test_cross_task_and_simultaneous_close_do_not_duplicate_exit() -> None:
+    fake = FakeMCPClient()
+    fake.close_gate = asyncio.Event()
+    client = AgentCommunityClient(_client_factory=RecordingClientFactory(lambda: fake))
+    entered = asyncio.Event()
+    begin_close = asyncio.Event()
+
+    async def own_lifecycle() -> None:
+        await client.__aenter__()
+        entered.set()
+        await begin_close.wait()
+        await client.close()
+
+    owner = asyncio.create_task(own_lifecycle())
+    await entered.wait()
+    with pytest.raises(AgentCommunityProtocolError, match="same task"):
+        await client.close()
+
+    begin_close.set()
+    while fake.exit_count == 0:
+        await asyncio.sleep(0)
+    with pytest.raises(AgentCommunityProtocolError, match="close"):
+        await client.close()
+    assert fake.exit_count == 1
+
+    fake.close_gate.set()
+    await owner
+    assert fake.exit_count == 1
+    assert fake.successful_exit_count == 1
+
+
+@pytest.mark.anyio
+async def test_tool_call_during_close_is_rejected() -> None:
+    fake = FakeMCPClient()
+    fake.close_gate = asyncio.Event()
+    client = AgentCommunityClient(_client_factory=RecordingClientFactory(lambda: fake))
+    entered = asyncio.Event()
+    begin_close = asyncio.Event()
+
+    async def own_lifecycle() -> None:
+        await client.__aenter__()
+        entered.set()
+        await begin_close.wait()
+        await client.close()
+
+    owner = asyncio.create_task(own_lifecycle())
+    await entered.wait()
+    begin_close.set()
+    while fake.exit_count == 0:
+        await asyncio.sleep(0)
+
+    with pytest.raises(AgentCommunityProtocolError, match="closing"):
+        await client._call_typed("get_community_stats", {}, CommunityStats)
+
+    fake.close_gate.set()
+    await owner
+    assert fake.calls == []
 
 
 @pytest.mark.anyio
@@ -234,3 +342,24 @@ async def test_cancellation_during_tool_call_propagates_unchanged() -> None:
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
+
+
+@pytest.mark.anyio
+async def test_concurrent_tool_call_is_rejected() -> None:
+    fake = FakeMCPClient()
+    fake.call_gate = asyncio.Event()
+    client = AgentCommunityClient(_client_factory=RecordingClientFactory(lambda: fake))
+
+    async with client:
+        first_call = asyncio.create_task(
+            client._call_typed("first", {}, CommunityStats)
+        )
+        while not fake.calls:
+            await asyncio.sleep(0)
+        with pytest.raises(AgentCommunityProtocolError, match="Concurrent"):
+            await client._call_typed("second", {}, CommunityStats)
+        first_call.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first_call
+
+    assert fake.calls == [("first", {})]

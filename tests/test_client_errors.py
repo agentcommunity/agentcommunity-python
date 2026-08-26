@@ -9,6 +9,7 @@ from fakes import (
     error_result,
     successful_result,
 )
+from mcp.types import CallToolResult, ImageContent, TextContent
 from pydantic import ValidationError
 
 from agentcommunity import (
@@ -49,6 +50,22 @@ async def test_tool_transport_failure_is_translated_with_cause() -> None:
         with pytest.raises(
             AgentCommunityTransportError, match="get_community_stats"
         ) as captured:
+            await client._call_typed("get_community_stats", {}, CommunityStats)
+
+    assert captured.value.__cause__ is upstream
+
+
+@pytest.mark.anyio
+async def test_upstream_mcp_result_validation_failure_is_protocol_error() -> None:
+    with pytest.raises(ValidationError) as validation:
+        CommunityStats.model_validate({"member_count": "many", "note": "bad"})
+    upstream = validation.value
+    fake = FakeMCPClient()
+    fake.call_error = upstream
+    client = AgentCommunityClient(_client_factory=RecordingClientFactory(lambda: fake))
+
+    async with client:
+        with pytest.raises(AgentCommunityProtocolError) as captured:
             await client._call_typed("get_community_stats", {}, CommunityStats)
 
     assert captured.value.__cause__ is upstream
@@ -102,6 +119,36 @@ async def test_tool_error_uses_only_bounded_safe_text() -> None:
     assert "public message" in message
     assert len(message) <= 600
     assert "TextContent" not in message
+
+
+@pytest.mark.anyio
+async def test_tool_error_sanitizes_controls_and_bounds_multiple_blocks() -> None:
+    fake = FakeMCPClient()
+    fake.results = [
+        CallToolResult(
+            content=[
+                ImageContent(data="AAAA", mime_type="image/png"),
+                TextContent(text="safe\x1b[31m red\x00 nul\x9b c1"),
+                TextContent(text="y" * 100_000),
+                TextContent(text="must-not-appear"),
+            ],
+            is_error=True,
+        )
+    ]
+    client = AgentCommunityClient(_client_factory=RecordingClientFactory(lambda: fake))
+
+    async with client:
+        with pytest.raises(AgentCommunityToolError) as captured:
+            await client._call_typed("get_community_stats", {}, CommunityStats)
+
+    message = str(captured.value)
+    assert "safe [31m red nul c1" in message
+    assert "\x1b" not in message
+    assert "\x00" not in message
+    assert "\x9b" not in message
+    assert "AAAA" not in message
+    assert "must-not-appear" not in message
+    assert len(message) <= 600
 
 
 @pytest.mark.anyio

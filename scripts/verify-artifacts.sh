@@ -67,7 +67,13 @@ import re
 import sys
 import tarfile
 import zipfile
+from email.parser import BytesParser
 from pathlib import PurePosixPath
+
+from packaging.requirements import Requirement
+
+if sys.flags.optimize:
+    raise SystemExit("PYTHONOPTIMIZE must be disabled for artifact verification")
 
 wheel_path, sdist_path = sys.argv[1:]
 expected_package_files = {
@@ -103,13 +109,44 @@ def validate_contents(archive_path: str, name: str, data: bytes) -> None:
     )
 
 
+def validate_runtime_requirements(archive_path: str, metadata_bytes: bytes) -> None:
+    metadata = BytesParser().parsebytes(metadata_bytes)
+    requirements = {
+        Requirement(value)
+        for value in metadata.get_all("Requires-Dist", [])
+        if "extra" not in str(Requirement(value).marker)
+    }
+    expected = {
+        Requirement("jsonschema>=4.20,<5"),
+        Requirement("mcp>=2.1.1,<3"),
+        Requirement("pydantic>=2.12,<3"),
+    }
+    if requirements != expected:
+        raise SystemExit(
+            "mandatory Requires-Dist mismatch in "
+            f"{archive_path}: got {sorted(map(str, requirements))}"
+        )
+
+
 with zipfile.ZipFile(wheel_path) as archive:
+    wheel_metadata = [
+        name for name in archive.namelist() if name.endswith(".dist-info/METADATA")
+    ]
+    assert len(wheel_metadata) == 1
+    validate_runtime_requirements(wheel_path, archive.read(wheel_metadata[0]))
     for name in archive.namelist():
         validate_name(wheel_path, name)
         if not name.endswith("/"):
             validate_contents(wheel_path, name, archive.read(name))
 
 with tarfile.open(sdist_path, mode="r:gz") as archive:
+    sdist_metadata = [
+        member for member in archive.getmembers() if member.name.endswith("/PKG-INFO")
+    ]
+    assert len(sdist_metadata) == 1
+    extracted_metadata = archive.extractfile(sdist_metadata[0])
+    assert extracted_metadata is not None
+    validate_runtime_requirements(sdist_path, extracted_metadata.read())
     for member in archive.getmembers():
         name = member.name
         validate_name(sdist_path, name)
@@ -142,9 +179,17 @@ verify_install() {
     "$environment/bin/python" - <<'PY'
 from importlib.metadata import distribution, version
 from importlib.resources import files
+import asyncio
+import sys
+from types import TracebackType
+from typing import Any
 
 import agentcommunity
 from agentcommunity import AgentCommunityClient, CommunityStats
+from mcp.types import CallToolResult
+
+if sys.flags.optimize:
+    raise SystemExit("PYTHONOPTIMIZE must be disabled for artifact verification")
 
 expected = [
     "__version__",
@@ -178,11 +223,70 @@ assert set(metadata.get_all("Project-URL") or ()) == {
     "Issues, https://github.com/agentcommunity/agentcommunity-python/issues",
 }
 
-client = AgentCommunityClient(endpoint="http://127.0.0.1:9/mcp", timeout=1.0)
-assert client.endpoint == "http://127.0.0.1:9/mcp"
-assert client.timeout == 1.0
-stats = CommunityStats(member_count=0, note="offline artifact check")
-assert stats.member_count == 0
+
+class OfflineMCPClient:
+    def __init__(self) -> None:
+        self.enter_count = 0
+        self.exit_count = 0
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def __aenter__(self) -> "OfflineMCPClient":
+        self.enter_count += 1
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        del exc_type, exc_value, traceback
+        self.exit_count += 1
+
+    async def call_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any] | None = None,
+        *,
+        read_timeout_seconds: float | None = None,
+    ) -> CallToolResult:
+        assert read_timeout_seconds == 1.0
+        self.calls.append((name, arguments or {}))
+        return CallToolResult(
+            content=[],
+            structured_content={
+                "member_count": 0,
+                "note": "offline artifact check",
+            },
+        )
+
+
+offline_client = OfflineMCPClient()
+
+
+def offline_factory(endpoint: str, timeout: float) -> OfflineMCPClient:
+    assert endpoint == "http://127.0.0.1:9/mcp"
+    assert timeout == 1.0
+    return offline_client
+
+
+async def verify_offline_behavior() -> None:
+    client = AgentCommunityClient(
+        endpoint="http://127.0.0.1:9/mcp",
+        timeout=1.0,
+        _client_factory=offline_factory,
+    )
+    async with client:
+        stats = await client.community_stats()
+    assert isinstance(stats, CommunityStats)
+    assert stats.member_count == 0
+    assert stats.note == "offline artifact check"
+
+
+asyncio.run(verify_offline_behavior())
+assert offline_client.enter_count == 1
+assert offline_client.exit_count == 1
+assert offline_client.calls == [("get_community_stats", {})]
 PY
   )
 }

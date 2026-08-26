@@ -14,15 +14,15 @@ from agentcommunity.models import (
 
 __version__ = "0.1.0"
 
-__all__ = [
+__all__ = [  # noqa: RUF022 - public contract order is intentional
+    "__version__",
     "AgentCommunityClient",
+    "CommunityStats",
+    "MemberMatch",
+    "MemberLookup",
+    "CertificateVerification",
     "AgentCommunityError",
+    "AgentCommunityTransportError",
     "AgentCommunityProtocolError",
     "AgentCommunityToolError",
-    "AgentCommunityTransportError",
-    "CertificateVerification",
-    "CommunityStats",
-    "MemberLookup",
-    "MemberMatch",
-    "__version__",
 ]

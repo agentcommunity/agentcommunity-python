@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "agentcommunity"
 version = "0.1.0"
 description = "Typed Python client for the Agent Community MCP endpoint"
-readme = { text = "Official typed Python client for the Agent Community MCP endpoint.", content-type = "text/markdown" }
+readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 classifiers = [
@@ -45,10 +45,22 @@ dev = [
 [tool.hatch.build.targets.wheel]
 packages = ["src/agentcommunity"]
 
+[tool.hatch.build.targets.sdist]
+exclude = [
+  "/.github",
+  "/docs",
+  "/scripts",
+  "/tests",
+  "/uv.lock",
+]
+
 [tool.pytest.ini_options]
-addopts = "-ra"
+addopts = "-ra -m 'not production'"
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+  "production: tests that call the live Agent Community endpoint",
+]
 
 [tool.ruff]
 target-version = "py310"

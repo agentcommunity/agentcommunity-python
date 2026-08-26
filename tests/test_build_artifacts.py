@@ -24,6 +24,12 @@ def test_sdist_excludes_local_worktree_metadata(tmp_path: Path) -> None:
     with tarfile.open(sdist_path, mode="r:gz") as archive:
         members = archive.getmembers()
         assert all(".git" not in PurePosixPath(member.name).parts for member in members)
+        assert all(
+            "uv.lock" not in PurePosixPath(member.name).parts for member in members
+        )
+        assert all(
+            "tests" not in PurePosixPath(member.name).parts for member in members
+        )
 
         for member in members:
             if not member.isfile():

@@ -6,7 +6,7 @@
 
 **Architecture:** `AgentCommunityClient` is an async context-manager wrapper around the official high-level `mcp.Client`. A private transport adapter owns MCP lifecycle and exception translation; public methods validate arguments and turn required `structured_content` into strict, frozen Pydantic models. Tests pin the immutable 1.5.0 MCP contract and exercise the real MCP client stack locally, while production smoke checks stay optional and read-only.
 
-**Tech Stack:** Python 3.10+, MCP Python SDK 2.x, Pydantic 2.x, Hatchling, pytest/AnyIO, Ruff, mypy, GitHub Actions, PyPI Trusted Publishing.
+**Tech Stack:** Python 3.10+, MCP Python SDK 2.x, JSON Schema validation 4.x, Pydantic 2.x, Hatchling, pytest/AnyIO, Ruff, mypy, GitHub Actions, PyPI Trusted Publishing.
 
 **Design reference:** `docs/superpowers/specs/2026-08-27-agentcommunity-python-sdk-design.md`
 
@@ -49,7 +49,7 @@ Create a PEP 621 `pyproject.toml` using Hatchling with:
 
 - Distribution `agentcommunity`, version `0.1.0`, Python `>=3.10`, MIT metadata.
 - Homepage `https://agentcommunity.org`, documentation `https://agentcommunity.org/mcp/docs`, source `https://github.com/agentcommunity/agentcommunity-python`, issues URL, and typed-package classifier.
-- Dependencies exactly bounded as `mcp>=2.1.1,<3` and `pydantic>=2.12,<3`.
+- Direct runtime dependencies exactly bounded as `jsonschema>=4.20,<5`, `mcp>=2.1.1,<3`, and `pydantic>=2.12,<3`. `jsonschema` is direct because runtime protocol-error classification imports `jsonschema.exceptions.ValidationError`; do not rely on MCP to provide it transitively.
 - Dev dependency groups sufficient for pytest, AnyIO, Ruff, mypy, build, and Twine.
 - Ruff target Python 3.10 and a focused rule set; mypy strict mode for `src` and `tests`; pytest test path/configuration.
 - Hatch wheel package path `src/agentcommunity` and include `py.typed`.
@@ -212,6 +212,7 @@ In `_transport.py`, implement the minimum adapter around `mcp.Client(endpoint)`:
 - Put the connection timeout outside the complete official client context, disable its deadline after connection succeeds, and allow official teardown to finish before exiting that outer scope.
 - Apply tool timeouts through the official high-level client's float `read_timeout_seconds` argument.
 - Do not wrap or retry official teardown. Translate a non-cancellation teardown failure once, mark the instance terminal, and allow cancellation to propagate unchanged.
+- Classify the official output-schema failure through its `jsonschema.exceptions.ValidationError` cause. Keep `jsonschema>=4.20,<5` as a declared direct runtime dependency rather than relying on MCP's transitive dependency.
 - Translate transport failures while never catching `BaseException` or caller cancellation.
 - Call tools using the public MCP SDK API.
 

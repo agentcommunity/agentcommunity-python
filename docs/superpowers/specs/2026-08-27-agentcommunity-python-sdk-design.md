@@ -19,8 +19,11 @@ The SDK is also intended to give package registries and agent-readiness scanners
 - License: MIT.
 - Package homepage and project URLs must point to `https://agentcommunity.org` and the official source repository.
 - Runtime dependencies:
+  - `jsonschema>=4.20,<5`
   - `mcp>=2.1.1,<3`
   - `pydantic>=2.12,<3`
+
+`jsonschema` is a direct runtime dependency because protocol-error classification imports `jsonschema.exceptions.ValidationError`. The SDK must declare that import rather than rely on MCP's transitive dependency.
 
 The PyPI name must be checked again immediately before publication. A currently unclaimed name is not a reservation.
 

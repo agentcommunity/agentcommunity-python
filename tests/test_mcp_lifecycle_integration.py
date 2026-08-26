@@ -201,3 +201,47 @@ async def test_real_output_schema_mismatch_is_protocol_error() -> None:
     upstream = captured.value.__cause__
     assert isinstance(upstream, RuntimeError)
     assert isinstance(upstream.__cause__, JsonSchemaValidationError)
+
+
+@pytest.mark.anyio
+async def test_real_missing_structured_content_is_protocol_error() -> None:
+    async def list_tools(
+        context: ServerRequestContext[Any, Any],
+        params: types.PaginatedRequestParams | None,
+    ) -> types.ListToolsResult:
+        del context, params
+        return types.ListToolsResult(
+            tools=[
+                types.Tool(
+                    name="missing",
+                    input_schema={"type": "object"},
+                    output_schema={
+                        "type": "object",
+                        "properties": {"member_count": {"type": "integer"}},
+                        "required": ["member_count"],
+                    },
+                )
+            ]
+        )
+
+    async def call_tool(
+        context: ServerRequestContext[Any, Any],
+        params: types.CallToolRequestParams,
+    ) -> types.CallToolResult:
+        del context, params
+        return types.CallToolResult(content=[types.TextContent(text="missing")])
+
+    server = Server(
+        "missing-structured", on_list_tools=list_tools, on_call_tool=call_tool
+    )
+
+    def factory(endpoint: str, timeout: float) -> Client:
+        del endpoint
+        return Client(server, mode="legacy", read_timeout_seconds=timeout)
+
+    sdk = AgentCommunityClient(_client_factory=factory)
+    async with sdk:
+        with pytest.raises(AgentCommunityProtocolError) as captured:
+            await sdk._call_typed("missing", {}, CommunityStats)
+
+    assert isinstance(captured.value.__cause__, RuntimeError)

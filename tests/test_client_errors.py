@@ -55,6 +55,19 @@ async def test_connection_failure_is_translated_with_cause() -> None:
 
 
 @pytest.mark.anyio
+async def test_connection_runtime_failure_remains_transport_error() -> None:
+    upstream = RuntimeError("MCP initialization state failed")
+    fake = FakeMCPClient()
+    fake.connect_error = upstream
+    client = AgentCommunityClient(_client_factory=RecordingClientFactory(lambda: fake))
+
+    with pytest.raises(AgentCommunityTransportError, match="connect") as captured:
+        await client.__aenter__()
+
+    assert captured.value.__cause__ is upstream
+
+
+@pytest.mark.anyio
 async def test_connection_validation_failure_is_protocol_error_with_cause() -> None:
     with pytest.raises(ValidationError) as validation:
         CommunityStats.model_validate({"member_count": "many", "note": "bad"})
@@ -71,9 +84,7 @@ async def test_connection_validation_failure_is_protocol_error_with_cause() -> N
 
 @pytest.mark.anyio
 async def test_tool_transport_failure_is_translated_with_cause() -> None:
-    transport_cause = ConnectionError("stream broke")
-    upstream = RuntimeError("MCP stream ended")
-    upstream.__cause__ = transport_cause
+    upstream = ConnectionError("MCP stream ended")
     fake = FakeMCPClient()
     fake.call_error = upstream
     client = AgentCommunityClient(_client_factory=RecordingClientFactory(lambda: fake))
@@ -85,7 +96,6 @@ async def test_tool_transport_failure_is_translated_with_cause() -> None:
             await client._call_typed("get_community_stats", {}, CommunityStats)
 
     assert captured.value.__cause__ is upstream
-    assert upstream.__cause__ is transport_cause
 
 
 @pytest.mark.anyio

@@ -227,12 +227,13 @@ class _MCPTransport:
                 f"MCP tool {name!r} returned a protocol-invalid result"
             ) from error
         except RuntimeError as error:
-            if _is_output_schema_failure(error):
-                raise AgentCommunityProtocolError(
-                    f"MCP tool {name!r} returned a protocol-invalid result"
-                ) from error
-            raise AgentCommunityTransportError(
-                f"Failed while calling MCP tool {name!r}"
+            diagnostic = (
+                "violated its advertised output schema"
+                if _is_output_schema_failure(error)
+                else "returned a protocol-invalid result"
+            )
+            raise AgentCommunityProtocolError(
+                f"MCP tool {name!r} {diagnostic}"
             ) from error
         except MCPError as error:
             if error.code == REQUEST_TIMEOUT:

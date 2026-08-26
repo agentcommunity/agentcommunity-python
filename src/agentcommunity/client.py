@@ -14,6 +14,7 @@ from agentcommunity.errors import AgentCommunityProtocolError, AgentCommunityToo
 _DEFAULT_ENDPOINT = "https://agentcommunity.org/mcp"
 _DEFAULT_TIMEOUT = 15.0
 _MAX_TOOL_ERROR_TEXT = 500
+_HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
 
 _ModelT = TypeVar("_ModelT", bound=BaseModel)
 
@@ -98,6 +99,11 @@ def _validate_endpoint(endpoint: str) -> str:
         raise ValueError("endpoint is not a valid HTTP(S) URL") from error
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise ValueError("endpoint must be an absolute HTTP(S) URL")
+    if any(
+        _has_invalid_percent_escape(component)
+        for component in (parsed.netloc, parsed.path, parsed.query)
+    ):
+        raise ValueError("endpoint contains an invalid percent escape")
     if parsed.hostname is None or (
         parsed_port is not None and not 0 < parsed_port < 65536
     ):
@@ -107,6 +113,19 @@ def _validate_endpoint(endpoint: str) -> str:
     if parsed.fragment:
         raise ValueError("endpoint must not contain a fragment")
     return endpoint
+
+
+def _has_invalid_percent_escape(value: str) -> bool:
+    index = 0
+    while index < len(value):
+        if value[index] != "%":
+            index += 1
+            continue
+        escape = value[index + 1 : index + 3]
+        if len(escape) != 2 or not set(escape) <= _HEX_DIGITS:
+            return True
+        index += 3
+    return False
 
 
 def _validate_timeout(timeout: float) -> float:

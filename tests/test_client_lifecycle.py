@@ -6,7 +6,11 @@ import math
 import pytest
 from fakes import FakeMCPClient, RecordingClientFactory, successful_result
 
-from agentcommunity import AgentCommunityClient, AgentCommunityProtocolError
+from agentcommunity import (
+    AgentCommunityClient,
+    AgentCommunityProtocolError,
+    AgentCommunityTransportError,
+)
 from agentcommunity.models import CommunityStats
 
 
@@ -40,6 +44,9 @@ def test_default_and_overridden_configuration() -> None:
         "https://user:secret@agentcommunity.org/mcp",
         "https://agentcommunity.org/mcp#fragment",
         "https://agent community.org/mcp",
+        "https://%zz/mcp",
+        "https://example.com/%zz",
+        "https://example.com/mcp?cursor=%0x",
     ],
 )
 def test_invalid_endpoints_fail_locally(endpoint: object) -> None:
@@ -53,6 +60,20 @@ def test_invalid_endpoints_fail_locally(endpoint: object) -> None:
 def test_invalid_timeouts_fail_locally(timeout: object) -> None:
     with pytest.raises((TypeError, ValueError)):
         AgentCommunityClient(timeout=timeout)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "https://%65xample.com/mcp",
+        "https://example.com/a%20path",
+        "https://example.com/mcp?cursor=a%2Fb",
+    ],
+)
+def test_valid_percent_escapes_are_preserved(endpoint: str) -> None:
+    client = AgentCommunityClient(endpoint=endpoint)
+
+    assert client.endpoint == endpoint
 
 
 @pytest.mark.anyio
@@ -125,6 +146,67 @@ async def test_close_is_idempotent_before_and_after_context_exit() -> None:
     await client.close()
 
     assert factory.clients[0].exit_count == 1
+
+
+@pytest.mark.anyio
+async def test_close_timeout_retains_connection_for_successful_retry() -> None:
+    fake = FakeMCPClient()
+    fake.close_gate = asyncio.Event()
+    client = AgentCommunityClient(
+        timeout=0.01, _client_factory=RecordingClientFactory(lambda: fake)
+    )
+    await client.__aenter__()
+
+    with pytest.raises(AgentCommunityTransportError, match="close"):
+        await client.close()
+
+    fake.close_gate.set()
+    await client.close()
+    await client.close()
+
+    assert fake.exit_count == 2
+    assert fake.successful_exit_count == 1
+
+
+@pytest.mark.anyio
+async def test_close_failure_retains_connection_for_successful_retry() -> None:
+    upstream = OSError("close failed")
+    fake = FakeMCPClient()
+    fake.close_error = upstream
+    client = AgentCommunityClient(_client_factory=RecordingClientFactory(lambda: fake))
+    await client.__aenter__()
+
+    with pytest.raises(AgentCommunityTransportError) as captured:
+        await client.close()
+    assert captured.value.__cause__ is upstream
+
+    fake.close_error = None
+    await client.close()
+    await client.close()
+
+    assert fake.exit_count == 2
+    assert fake.successful_exit_count == 1
+
+
+@pytest.mark.anyio
+async def test_close_cancellation_retains_connection_for_successful_retry() -> None:
+    fake = FakeMCPClient()
+    fake.close_gate = asyncio.Event()
+    client = AgentCommunityClient(_client_factory=RecordingClientFactory(lambda: fake))
+    await client.__aenter__()
+
+    task = asyncio.create_task(client.close())
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    fake.close_gate.set()
+    await client.close()
+    await client.close()
+
+    assert fake.exit_count == 2
+    assert fake.successful_exit_count == 1
 
 
 @pytest.mark.anyio

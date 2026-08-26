@@ -11,11 +11,13 @@ class FakeMCPClient:
     def __init__(self) -> None:
         self.enter_count = 0
         self.exit_count = 0
+        self.successful_exit_count = 0
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.connect_error: BaseException | None = None
         self.close_error: BaseException | None = None
         self.call_error: BaseException | None = None
         self.connect_gate: asyncio.Event | None = None
+        self.close_gate: asyncio.Event | None = None
         self.call_gate: asyncio.Event | None = None
         self.results: list[CallToolResult] = []
 
@@ -35,8 +37,11 @@ class FakeMCPClient:
     ) -> None:
         del exc_type, exc_value, traceback
         self.exit_count += 1
+        if self.close_gate is not None:
+            await self.close_gate.wait()
         if self.close_error is not None:
             raise self.close_error
+        self.successful_exit_count += 1
 
     async def call_tool(
         self, name: str, arguments: dict[str, Any] | None = None

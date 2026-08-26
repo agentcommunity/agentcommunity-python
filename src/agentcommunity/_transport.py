@@ -81,7 +81,6 @@ class _MCPTransport:
         client = self._client
         if client is None:
             return
-        self._client = None
 
         try:
             with fail_after(self._timeout):
@@ -94,6 +93,8 @@ class _MCPTransport:
             raise AgentCommunityTransportError(
                 "Failed to close the Agent Community MCP connection"
             ) from error
+        else:
+            self._client = None
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> CallToolResult:
         client = self._client

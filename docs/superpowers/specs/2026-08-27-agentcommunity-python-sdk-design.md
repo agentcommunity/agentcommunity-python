@@ -93,19 +93,38 @@ All exported result models are frozen Pydantic models with strict validation and
 
 ### `CommunityStats`
 
-Represents the complete structured result of `get_community_stats` using the field names and types from the immutable MCP contract fixture.
+Represents the complete structured result of `get_community_stats`:
+
+- `member_count: int`
+- `note: str`
 
 ### `MemberMatch`
 
-Represents one member match from `lookup_member` using the field names and types from the immutable MCP contract fixture.
+Represents one member match from `lookup_member`:
+
+- `display_name: str`
+- `member_since: datetime.date | None`
+- `profile_url: pydantic.AnyUrl`
 
 ### `MemberLookup`
 
-Represents the complete lookup response and contains the normalized query/result metadata and a tuple of `MemberMatch` records, according to the immutable contract fixture.
+Represents the complete lookup response:
+
+- `status: Literal["member", "not_found", "ambiguous"]`
+- `matches: tuple[MemberMatch, ...]`, limited to at most five items
 
 ### `CertificateVerification`
 
-Represents all four public certificate outcomes. Model validation enforces these cross-field invariants:
+Represents all four public certificate outcomes with these fields:
+
+- `certificate_id: str`
+- `status: Literal["invalid_format", "not_found", "issued", "unavailable"]`
+- `valid_format: bool`
+- `issued: bool | None`
+- `agent_name: str | None`
+- `certificate_url: pydantic.AnyUrl | None`
+
+Model validation enforces these cross-field invariants:
 
 | Status | `valid_format` | `issued` | Agent and URL fields |
 |---|---:|---:|---|
@@ -114,7 +133,7 @@ Represents all four public certificate outcomes. Model validation enforces these
 | `issued` | `true` | `true` | present |
 | `unavailable` | `true` | `null` | absent |
 
-The exact field names and URL representation come from the pinned MCP contract, not an inferred example response.
+The field names and URL/date representations come from the pinned MCP contract, not an inferred example response.
 
 ## Error model
 
@@ -234,4 +253,3 @@ Version 0.1 is ready for publication when:
 - The pinned MCP contract fixture has the approved digest.
 - Release metadata points to the official domain and source repository.
 - No secrets, publication credentials, registration calls, or website advertisement are included.
-

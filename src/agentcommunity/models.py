@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+import re
 from typing import Any, Literal
 
 from pydantic import (
@@ -31,6 +32,8 @@ class MemberMatch(_StrictModel):
     @classmethod
     def parse_member_since(cls, value: Any) -> Any:
         if isinstance(value, str):
+            if re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", value) is None:
+                raise ValueError("member_since must use ASCII YYYY-MM-DD format")
             return datetime.date.fromisoformat(value)
         return value
 

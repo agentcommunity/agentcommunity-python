@@ -61,6 +61,25 @@ def test_member_match_accepts_null_date() -> None:
 
 
 @pytest.mark.parametrize(
+    "member_since",
+    [
+        "20260827",
+        "2026-W35-4",
+        "\uff12\uff10\uff12\uff16-\uff10\uff18-\uff12\uff17",
+    ],
+)
+def test_member_match_rejects_non_rfc3339_dates(member_since: str) -> None:
+    with pytest.raises(ValidationError):
+        MemberMatch.model_validate(
+            {
+                "display_name": "Example Agent",
+                "member_since": member_since,
+                "profile_url": "https://agentcommunity.org/m/example-agent",
+            }
+        )
+
+
+@pytest.mark.parametrize(
     ("field", "value"),
     [
         ("member_since", "2026-02-30"),

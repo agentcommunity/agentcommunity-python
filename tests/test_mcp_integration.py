@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from typing import Any, cast
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
+import anyio
 import pytest
 from mcp import Client
 from mcp.server.mcpserver import MCPServer
@@ -23,7 +25,17 @@ def anyio_backend() -> str:
 async def test_real_mcp_client_executes_all_three_typed_methods_on_one_connection() -> (
     None
 ):
-    server = MCPServer("typed-read-only-tools")
+    cleanup_complete = anyio.Event()
+
+    @asynccontextmanager
+    async def lifespan(server: MCPServer[None]) -> AsyncIterator[None]:
+        del server
+        try:
+            yield None
+        finally:
+            cleanup_complete.set()
+
+    server = MCPServer("typed-read-only-tools", lifespan=lifespan)
     calls: list[tuple[str, dict[str, str]]] = []
 
     @server.tool(name="get_community_stats", structured_output=True)
@@ -61,13 +73,13 @@ async def test_real_mcp_client_executes_all_three_typed_methods_on_one_connectio
     def unrelated_tool() -> dict[str, bool]:
         return {"ignored": True}
 
-    clients: list[Client] = []
+    connection_count = 0
 
     def factory(endpoint: str, timeout: float) -> Client:
+        nonlocal connection_count
         del endpoint
-        client = Client(server, read_timeout_seconds=timeout)
-        clients.append(client)
-        return client
+        connection_count += 1
+        return Client(server, read_timeout_seconds=timeout)
 
     sdk = AgentCommunityClient(_client_factory=factory)
     async with sdk:
@@ -83,7 +95,5 @@ async def test_real_mcp_client_executes_all_three_typed_methods_on_one_connectio
         ("lookup_member", {"query": "Example Agent"}),
         ("verify_certificate", {"certificate_id": "MESA-DD6-660J"}),
     ]
-    assert len(clients) == 1
-    assert clients[0]._session is None
-    exit_stack = cast(Any, clients[0]._exit_stack)
-    assert not exit_stack._exit_callbacks
+    assert connection_count == 1
+    assert cleanup_complete.is_set()

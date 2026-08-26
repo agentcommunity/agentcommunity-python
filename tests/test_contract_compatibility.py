@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime
 import inspect
+from copy import deepcopy
 from typing import Any, get_args
 
 import pytest
@@ -34,6 +35,52 @@ def anyio_backend() -> str:
 
 def product_tools(contract: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {tool["name"]: tool for tool in contract["product_tools"]}
+
+
+def assert_schema_type_and_format(
+    schema: dict[str, Any],
+    expected_types: set[str],
+    expected_format: str | None = None,
+) -> None:
+    raw_type = schema.get("type")
+    actual_types = {raw_type} if isinstance(raw_type, str) else set(raw_type or [])
+    assert actual_types == expected_types
+    assert schema.get("format") == expected_format
+
+
+def assert_public_scalar_compatibility(
+    tools: dict[str, dict[str, Any]],
+) -> None:
+    stats = tools["get_community_stats"]["outputSchema"]["properties"]
+    assert CommunityStats.model_fields["member_count"].annotation is int
+    assert_schema_type_and_format(stats["member_count"], {"integer"})
+    assert CommunityStats.model_fields["note"].annotation is str
+    assert_schema_type_and_format(stats["note"], {"string"})
+
+    matches = tools["lookup_member"]["outputSchema"]["properties"]["matches"]
+    match = matches["items"]["properties"]
+    assert MemberMatch.model_fields["display_name"].annotation is str
+    assert_schema_type_and_format(match["display_name"], {"string"})
+    assert MemberMatch.model_fields["member_since"].annotation == datetime.date | None
+    assert_schema_type_and_format(match["member_since"], {"string", "null"}, "date")
+    assert MemberMatch.model_fields["profile_url"].annotation is AnyUrl
+    assert_schema_type_and_format(match["profile_url"], {"string"}, "uri")
+
+    certificate = tools["verify_certificate"]["outputSchema"]["properties"]
+    assert CertificateVerification.model_fields["certificate_id"].annotation is str
+    assert_schema_type_and_format(certificate["certificate_id"], {"string"})
+    assert CertificateVerification.model_fields["valid_format"].annotation is bool
+    assert_schema_type_and_format(certificate["valid_format"], {"boolean"})
+    assert CertificateVerification.model_fields["issued"].annotation == bool | None
+    assert_schema_type_and_format(certificate["issued"], {"boolean", "null"})
+    assert CertificateVerification.model_fields["agent_name"].annotation == str | None
+    assert_schema_type_and_format(certificate["agent_name"], {"string", "null"})
+    assert CertificateVerification.model_fields["certificate_url"].annotation == (
+        AnyUrl | None
+    )
+    assert_schema_type_and_format(
+        certificate["certificate_url"], {"string", "null"}, "uri"
+    )
 
 
 @pytest.mark.anyio
@@ -214,8 +261,7 @@ def test_public_model_shapes_align_with_pinned_output_contract(
             if field.is_required()
         } == set(output_schema["required"])
 
-    assert CommunityStats.model_fields["member_count"].annotation is int
-    assert CommunityStats.model_fields["note"].annotation is str
+    assert_public_scalar_compatibility(tools)
 
     lookup_schema = tools["lookup_member"]["outputSchema"]
     assert set(get_args(MemberLookup.model_fields["status"].annotation)) == set(
@@ -229,24 +275,51 @@ def test_public_model_shapes_align_with_pinned_output_contract(
     match_schema = lookup_schema["properties"]["matches"]["items"]
     assert set(MemberMatch.model_fields) == set(match_schema["properties"])
     assert set(MemberMatch.model_fields) == set(match_schema["required"])
-    assert MemberMatch.model_fields["display_name"].annotation is str
-    assert MemberMatch.model_fields["member_since"].annotation == datetime.date | None
-    assert MemberMatch.model_fields["profile_url"].annotation is AnyUrl
 
     certificate_schema = tools["verify_certificate"]["outputSchema"]
     assert set(
         get_args(CertificateVerification.model_fields["status"].annotation)
     ) == set(certificate_schema["properties"]["status"]["enum"])
-    assert CertificateVerification.model_fields["certificate_id"].annotation is str
-    assert CertificateVerification.model_fields["valid_format"].annotation is bool
     for field_name in ("issued", "agent_name", "certificate_url"):
         assert type(None) in get_args(
             CertificateVerification.model_fields[field_name].annotation
         )
         assert "null" in certificate_schema["properties"][field_name]["type"]
-    assert CertificateVerification.model_fields["certificate_url"].annotation == (
-        AnyUrl | None
-    )
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "nested_matches", "field_name", "mutated_schema"),
+    [
+        ("get_community_stats", False, "member_count", {"type": "number"}),
+        (
+            "verify_certificate",
+            False,
+            "issued",
+            {"type": ["boolean", "integer", "null"]},
+        ),
+        (
+            "lookup_member",
+            True,
+            "member_since",
+            {"type": ["string", "null"]},
+        ),
+    ],
+)
+def test_scalar_compatibility_rejects_incompatible_contract_mutations(
+    contract: dict[str, Any],
+    tool_name: str,
+    nested_matches: bool,
+    field_name: str,
+    mutated_schema: dict[str, Any],
+) -> None:
+    tools = product_tools(deepcopy(contract))
+    properties = tools[tool_name]["outputSchema"]["properties"]
+    if nested_matches:
+        properties = properties["matches"]["items"]["properties"]
+    properties[field_name] = mutated_schema
+
+    with pytest.raises(AssertionError):
+        assert_public_scalar_compatibility(tools)
 
 
 def test_only_approved_contract_tools_have_public_wrappers(

@@ -73,6 +73,36 @@ async def test_emitted_arguments_satisfy_pinned_input_schemas(
     ]
 
 
+@pytest.mark.anyio
+async def test_lookup_validation_tracks_pinned_input_boundaries(
+    contract: dict[str, Any],
+) -> None:
+    query_schema = product_tools(contract)["lookup_member"]["inputSchema"][
+        "properties"
+    ]["query"]
+    minimum = query_schema["minLength"]
+    maximum = query_schema["maxLength"]
+    accepted_queries = ["q" * minimum, "q" * maximum]
+    rejected_queries = ["q" * (minimum - 1), "q" * (maximum + 1)]
+    fake = FakeMCPClient()
+    fake.results = [
+        successful_result({"status": "not_found", "matches": []})
+        for _ in accepted_queries
+    ]
+    client = AgentCommunityClient(_client_factory=RecordingClientFactory(lambda: fake))
+
+    async with client:
+        for query in accepted_queries:
+            await client.lookup_member(f" {query} ")
+        for query in rejected_queries:
+            with pytest.raises(ValueError):
+                await client.lookup_member(query)
+
+    assert fake.calls == [
+        ("lookup_member", {"query": query}) for query in accepted_queries
+    ]
+
+
 @pytest.mark.parametrize(
     ("tool_name", "model_type", "examples"),
     [
@@ -100,13 +130,10 @@ async def test_emitted_arguments_satisfy_pinned_input_schemas(
                     "status": "ambiguous",
                     "matches": [
                         {
-                            "display_name": f"Example Agent {index}",
+                            "display_name": "Example Agent 2",
                             "member_since": "2026-08-27",
-                            "profile_url": (
-                                f"https://agentcommunity.org/m/example-agent-{index}"
-                            ),
+                            "profile_url": "https://agentcommunity.org/m/example-agent-2",
                         }
-                        for index in range(5)
                     ],
                 },
             ],
@@ -194,7 +221,11 @@ def test_public_model_shapes_align_with_pinned_output_contract(
     assert set(get_args(MemberLookup.model_fields["status"].annotation)) == set(
         lookup_schema["properties"]["status"]["enum"]
     )
-    assert MemberLookup.model_fields["matches"].metadata[0].max_length == 5
+    model_matches_schema = MemberLookup.model_json_schema()["properties"]["matches"]
+    assert (
+        model_matches_schema["maxItems"]
+        == lookup_schema["properties"]["matches"]["maxItems"]
+    )
     match_schema = lookup_schema["properties"]["matches"]["items"]
     assert set(MemberMatch.model_fields) == set(match_schema["properties"])
     assert set(MemberMatch.model_fields) == set(match_schema["required"])

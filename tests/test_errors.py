@@ -18,6 +18,7 @@ def test_public_exception_hierarchy() -> None:
 
 def test_public_exports_are_exact() -> None:
     assert agentcommunity.__all__ == [
+        "AgentCommunityClient",
         "AgentCommunityError",
         "AgentCommunityProtocolError",
         "AgentCommunityToolError",

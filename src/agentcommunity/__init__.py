@@ -1,3 +1,4 @@
+from agentcommunity.client import AgentCommunityClient
 from agentcommunity.errors import (
     AgentCommunityError,
     AgentCommunityProtocolError,
@@ -14,6 +15,7 @@ from agentcommunity.models import (
 __version__ = "0.1.0"
 
 __all__ = [
+    "AgentCommunityClient",
     "AgentCommunityError",
     "AgentCommunityProtocolError",
     "AgentCommunityToolError",

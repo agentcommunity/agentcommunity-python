@@ -90,6 +90,10 @@ class _MCPTransport:
             raise AgentCommunityTransportError(
                 f"Timed out while attempting to connect after {self._timeout:g} seconds"
             ) from error
+        except ValidationError as error:
+            raise AgentCommunityProtocolError(
+                "MCP initialization returned protocol-invalid data"
+            ) from error
         except Exception as error:
             raise AgentCommunityTransportError(
                 "Failed to connect to the Agent Community MCP endpoint"

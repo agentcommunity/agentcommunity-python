@@ -40,6 +40,21 @@ async def test_connection_failure_is_translated_with_cause() -> None:
 
 
 @pytest.mark.anyio
+async def test_connection_validation_failure_is_protocol_error_with_cause() -> None:
+    with pytest.raises(ValidationError) as validation:
+        CommunityStats.model_validate({"member_count": "many", "note": "bad"})
+    upstream = validation.value
+    fake = FakeMCPClient()
+    fake.connect_error = upstream
+    client = AgentCommunityClient(_client_factory=RecordingClientFactory(lambda: fake))
+
+    with pytest.raises(AgentCommunityProtocolError, match="initialization") as captured:
+        await client.__aenter__()
+
+    assert captured.value.__cause__ is upstream
+
+
+@pytest.mark.anyio
 async def test_tool_transport_failure_is_translated_with_cause() -> None:
     upstream = RuntimeError("MCP stream ended")
     fake = FakeMCPClient()
@@ -149,6 +164,25 @@ async def test_tool_error_sanitizes_controls_and_bounds_multiple_blocks() -> Non
     assert "AAAA" not in message
     assert "must-not-appear" not in message
     assert len(message) <= 600
+
+
+@pytest.mark.anyio
+async def test_tool_error_sanitizes_bidi_controls_and_preserves_unicode() -> None:
+    fake = FakeMCPClient()
+    fake.results = [
+        error_result("readable café 日本語 \u202eevil\u2066 hidden\ud800 surrogate")
+    ]
+    client = AgentCommunityClient(_client_factory=RecordingClientFactory(lambda: fake))
+
+    async with client:
+        with pytest.raises(AgentCommunityToolError) as captured:
+            await client._call_typed("get_community_stats", {}, CommunityStats)
+
+    message = str(captured.value)
+    assert "readable café 日本語 evil hidden surrogate" in message
+    assert "\u202e" not in message
+    assert "\u2066" not in message
+    assert "\ud800" not in message
 
 
 @pytest.mark.anyio

@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 from types import TracebackType
 from typing import Any, TypeVar
+from unicodedata import category
 from urllib.parse import urlsplit
 
 from mcp.types import TextContent
@@ -15,6 +16,7 @@ _DEFAULT_ENDPOINT = "https://agentcommunity.org/mcp"
 _DEFAULT_TIMEOUT = 15.0
 _MAX_TOOL_ERROR_TEXT = 500
 _HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
+_UNSAFE_UNICODE_CATEGORIES = frozenset({"Cc", "Cf", "Cs"})
 
 _ModelT = TypeVar("_ModelT", bound=BaseModel)
 
@@ -145,8 +147,7 @@ def _safe_tool_error_text(content: list[Any]) -> str:
         if output:
             pending_space = True
         for character in item.text:
-            codepoint = ord(character)
-            if character.isspace() or codepoint <= 31 or 127 <= codepoint <= 159:
+            if character.isspace() or category(character) in _UNSAFE_UNICODE_CATEGORIES:
                 if output:
                     pending_space = True
                 continue

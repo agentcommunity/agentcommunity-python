@@ -217,6 +217,11 @@ Continuous integration runs:
 - Installation and tests from the source distribution.
 - A checked README example smoke test.
 
+Artifact verification receives a separately prepared wheelhouse and performs
+all clean installs with `--no-index`. Registry resolution belongs only to the
+wheelhouse-preparation step; verification fails closed when that input is
+missing or incomplete.
+
 End-to-end tests should avoid dependence on developer credentials or mutable registry state.
 
 ## Documentation
@@ -241,6 +246,9 @@ Releases use PyPI Trusted Publishing with provenance; no long-lived PyPI token i
 1. Builds wheel and source distribution once from a tagged commit.
 2. Tests those exact artifacts in clean environments.
 3. Publishes the unchanged artifacts after the configured trusted-publisher gate.
+
+Before building, the release workflow requires the Git tag to equal `v` plus
+the exact `project.version` from `pyproject.toml`.
 
 Creating the remote repository, pushing commits, configuring PyPI, and publishing are external state changes and require explicit user authorization. Local implementation can be completed and committed before those gates.
 

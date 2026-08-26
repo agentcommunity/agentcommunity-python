@@ -28,7 +28,7 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://agentcommunity.org"
-Documentation = "https://agentcommunity.org/mcp/docs"
+Documentation = "https://agentcommunity.org/docs/mcp-server"
 Source = "https://github.com/agentcommunity/agentcommunity-python"
 Issues = "https://github.com/agentcommunity/agentcommunity-python/issues"
 
@@ -39,6 +39,7 @@ dev = [
   "mypy>=1.17,<2",
   "pytest>=8.4,<9",
   "ruff>=0.12,<1",
+  "tomli>=2,<3; python_version < '3.11'",
   "twine>=6.1,<7",
 ]
 
@@ -46,13 +47,19 @@ dev = [
 packages = ["src/agentcommunity"]
 
 [tool.hatch.build.targets.sdist]
-exclude = [
-  "/.github",
-  "/docs",
-  "/scripts",
-  "/tests",
-  "/uv.lock",
+ignore-vcs = true
+only-include = [
+  "CHANGELOG.md",
+  "CONTRIBUTING.md",
+  "LICENSE",
+  "README.md",
+  "SECURITY.md",
+  "pyproject.toml",
+  "src/agentcommunity",
 ]
+
+[tool.hatch.build.targets.sdist.hooks.custom]
+path = "scripts/hatch-sdist.py"
 
 [tool.pytest.ini_options]
 addopts = "-ra -m 'not production'"

@@ -18,8 +18,15 @@ Run the full local gate before submitting a change:
 rm -rf dist
 .venv/bin/python -m build
 .venv/bin/python -m twine check dist/*
-bash scripts/verify-artifacts.sh dist
+wheelhouse_dir="$(mktemp -d "${TMPDIR:-/tmp}/agentcommunity-wheelhouse.XXXXXX")"
+trap 'rm -rf -- "$wheelhouse_dir"' EXIT
+bash scripts/prepare-wheelhouse.sh "$wheelhouse_dir"
+bash scripts/verify-artifacts.sh dist "$wheelhouse_dir"
 ```
+
+Wheelhouse preparation is the only artifact-check step allowed to contact a
+package index. The verifier installs exclusively from that explicit directory
+with pip's `--no-index` mode and fails if the wheelhouse is incomplete.
 
 The default test suite is entirely offline and excludes tests marked
 `production`. Do not run the production smoke test as part of ordinary local or

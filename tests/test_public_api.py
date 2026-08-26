@@ -54,7 +54,7 @@ def test_project_metadata_matches_the_official_package_contract() -> None:
     ]
     assert project["urls"] == {
         "Homepage": "https://agentcommunity.org",
-        "Documentation": "https://agentcommunity.org/mcp/docs",
+        "Documentation": "https://agentcommunity.org/docs/mcp-server",
         "Source": "https://github.com/agentcommunity/agentcommunity-python",
         "Issues": "https://github.com/agentcommunity/agentcommunity-python/issues",
     }

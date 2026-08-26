@@ -94,7 +94,7 @@ bounded to compatible major versions: `jsonschema>=4.20,<5`, `mcp>=2.1.1,<3`,
 and `pydantic>=2.12,<3`. Only the latest 0.1 patch release receives security and
 compatibility fixes while the project is in its initial alpha series.
 
-See the [MCP documentation](https://agentcommunity.org/mcp/docs),
+See the [MCP documentation](https://agentcommunity.org/docs/mcp-server),
 [project source](https://github.com/agentcommunity/agentcommunity-python),
 [issue tracker](https://github.com/agentcommunity/agentcommunity-python/issues),
 and [security policy](SECURITY.md).

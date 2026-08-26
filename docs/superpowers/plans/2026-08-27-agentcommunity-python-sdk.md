@@ -48,7 +48,7 @@ Expected: FAIL because package/test dependencies and the fixture do not exist ye
 Create a PEP 621 `pyproject.toml` using Hatchling with:
 
 - Distribution `agentcommunity`, version `0.1.0`, Python `>=3.10`, MIT metadata.
-- Homepage `https://agentcommunity.org`, documentation `https://agentcommunity.org/mcp/docs`, source `https://github.com/agentcommunity/agentcommunity-python`, issues URL, and typed-package classifier.
+- Homepage `https://agentcommunity.org`, documentation `https://agentcommunity.org/docs/mcp-server`, source `https://github.com/agentcommunity/agentcommunity-python`, issues URL, and typed-package classifier.
 - Direct runtime dependencies exactly bounded as `jsonschema>=4.20,<5`, `mcp>=2.1.1,<3`, and `pydantic>=2.12,<3`. `jsonschema` is direct because runtime protocol-error classification imports `jsonschema.exceptions.ValidationError`; do not rely on MCP to provide it transitively.
 - Dev dependency groups sufficient for pytest, AnyIO, Ruff, mypy, build, and Twine.
 - Ruff target Python 3.10 and a focused rule set; mypy strict mode for `src` and `tests`; pytest test path/configuration.
@@ -386,14 +386,16 @@ Do not claim the package is already available on PyPI or that the website alread
 
 ### Step 4: Implement and exercise artifact verification
 
-Create `scripts/verify-artifacts.sh` as a strict, portable Bash script that accepts an artifact directory, creates temporary isolated virtual environments, then:
+Create `scripts/verify-artifacts.sh` as a strict, portable Bash script that accepts an artifact directory and an explicitly prepared wheelhouse, creates temporary isolated virtual environments, then:
 
 - Runs `twine check` on wheel and source distribution.
 - Installs the wheel without the source tree on `PYTHONPATH`, imports the exact public surface, checks version, and runs a minimal deterministic fake/local example.
 - Installs the source distribution in another clean environment and performs the same import/public-surface check.
 - Always cleans temporary directories.
 
-Do not publish or contact package registries.
+Do not publish or contact package registries. `scripts/prepare-wheelhouse.sh` is
+the separate, pre-verification step that may resolve dependencies; the verifier
+must install with `--no-index` from that wheelhouse only.
 
 ### Step 5: Run the full local release gate
 
@@ -406,7 +408,8 @@ python -m mypy src tests
 python -m pytest -q
 python -m build
 python -m twine check dist/*
-bash scripts/verify-artifacts.sh dist
+bash scripts/prepare-wheelhouse.sh /tmp/agentcommunity-wheelhouse
+bash scripts/verify-artifacts.sh dist /tmp/agentcommunity-wheelhouse
 ```
 
 Also inspect wheel and source distribution contents and verify no secrets, caches, tests-only helpers, or unexpected files ship. The pinned contract fixture may remain test-only and should not ship in the wheel.

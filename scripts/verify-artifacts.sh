@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -ne 1 ]]; then
-  echo "usage: $0 ARTIFACT_DIRECTORY" >&2
+if [[ $# -ne 2 ]]; then
+  echo "usage: $0 ARTIFACT_DIRECTORY WHEELHOUSE_DIRECTORY" >&2
   exit 64
 fi
 
@@ -14,6 +14,16 @@ fi
 artifact_dir="$(cd "$1" && pwd -P)"
 if [[ "$artifact_dir" != /* || "$artifact_dir" == "/" ]]; then
   echo "could not resolve a safe artifact directory" >&2
+  exit 66
+fi
+
+if [[ ! -d "$2" ]]; then
+  echo "wheelhouse directory does not exist: $2" >&2
+  exit 66
+fi
+wheelhouse_dir="$(cd "$2" && pwd -P)"
+if [[ "$wheelhouse_dir" != /* || "$wheelhouse_dir" == "/" ]]; then
+  echo "could not resolve a safe wheelhouse directory" >&2
   exit 66
 fi
 
@@ -134,26 +144,68 @@ with zipfile.ZipFile(wheel_path) as archive:
     ]
     assert len(wheel_metadata) == 1
     validate_runtime_requirements(wheel_path, archive.read(wheel_metadata[0]))
+    wheel_package_contents = {
+        name: archive.read(name)
+        for name in archive.namelist()
+        if name.startswith("agentcommunity/")
+    }
     for name in archive.namelist():
         validate_name(wheel_path, name)
         if not name.endswith("/"):
             validate_contents(wheel_path, name, archive.read(name))
 
 with tarfile.open(sdist_path, mode="r:gz") as archive:
+    members = archive.getmembers()
+    roots = {PurePosixPath(member.name).parts[0] for member in members}
+    assert len(roots) == 1
+    (sdist_root,) = roots
+    expected_sdist_files = {
+        f"{sdist_root}/CHANGELOG.md",
+        f"{sdist_root}/CONTRIBUTING.md",
+        f"{sdist_root}/LICENSE",
+        f"{sdist_root}/PKG-INFO",
+        f"{sdist_root}/README.md",
+        f"{sdist_root}/SECURITY.md",
+        f"{sdist_root}/pyproject.toml",
+        *{
+            f"{sdist_root}/src/{package_name}"
+            for package_name in expected_package_files
+        },
+    }
+    actual_sdist_files = {member.name for member in members if member.isfile()}
+    if actual_sdist_files != expected_sdist_files:
+        raise SystemExit(
+            "unexpected sdist contents: "
+            f"{sorted(actual_sdist_files ^ expected_sdist_files)}"
+        )
+    assert all(member.isfile() for member in members)
     sdist_metadata = [
-        member for member in archive.getmembers() if member.name.endswith("/PKG-INFO")
+        member for member in members if member.name.endswith("/PKG-INFO")
     ]
     assert len(sdist_metadata) == 1
     extracted_metadata = archive.extractfile(sdist_metadata[0])
     assert extracted_metadata is not None
     validate_runtime_requirements(sdist_path, extracted_metadata.read())
-    for member in archive.getmembers():
+    sdist_package_contents = {}
+    source_prefix = f"{sdist_root}/src/"
+    for member in members:
         name = member.name
         validate_name(sdist_path, name)
         if member.isfile():
             extracted = archive.extractfile(member)
             assert extracted is not None
-            validate_contents(sdist_path, name, extracted.read())
+            data = extracted.read()
+            validate_contents(sdist_path, name, data)
+            if name.startswith(source_prefix):
+                sdist_package_contents[name.removeprefix(source_prefix)] = data
+
+if wheel_package_contents != sdist_package_contents:
+    differing = sorted(
+        name
+        for name in expected_package_files
+        if wheel_package_contents.get(name) != sdist_package_contents.get(name)
+    )
+    raise SystemExit(f"wheel/sdist source mismatch: {differing}")
 
 with zipfile.ZipFile(wheel_path) as archive:
     wheel_names = set(archive.namelist())
@@ -172,8 +224,34 @@ PY
 verify_install() {
   local artifact="$1"
   local environment="$2"
+  local artifact_kind="$3"
   "$python_bin" -m venv "$environment"
-  "$environment/bin/python" -m pip install --disable-pip-version-check "$artifact"
+  if [[ "$artifact_kind" == "sdist" ]]; then
+    if ! PIP_NO_INDEX=1 "$environment/bin/python" -m pip install \
+      --disable-pip-version-check \
+      --no-index \
+      --find-links "$wheelhouse_dir" \
+      'hatchling==1.30.1'; then
+      echo "wheelhouse is incomplete for the Hatchling build backend" >&2
+      return 67
+    fi
+    if ! PIP_NO_INDEX=1 "$environment/bin/python" -m pip install \
+      --disable-pip-version-check \
+      --no-build-isolation \
+      --no-index \
+      --find-links "$wheelhouse_dir" \
+      "$artifact"; then
+      echo "wheelhouse is incomplete for the sdist installation" >&2
+      return 67
+    fi
+  elif ! PIP_NO_INDEX=1 "$environment/bin/python" -m pip install \
+    --disable-pip-version-check \
+    --no-index \
+    --find-links "$wheelhouse_dir" \
+    "$artifact"; then
+    echo "wheelhouse is incomplete for the wheel installation" >&2
+    return 67
+  fi
   (
     cd "$temp_dir"
     "$environment/bin/python" - <<'PY'
@@ -185,7 +263,12 @@ from types import TracebackType
 from typing import Any
 
 import agentcommunity
-from agentcommunity import AgentCommunityClient, CommunityStats
+from agentcommunity import (
+    AgentCommunityClient,
+    CertificateVerification,
+    CommunityStats,
+    MemberLookup,
+)
 from mcp.types import CallToolResult
 
 if sys.flags.optimize:
@@ -218,7 +301,7 @@ assert set(metadata.get_all("Requires-Dist") or ()) >= {
 }
 assert set(metadata.get_all("Project-URL") or ()) == {
     "Homepage, https://agentcommunity.org",
-    "Documentation, https://agentcommunity.org/mcp/docs",
+    "Documentation, https://agentcommunity.org/docs/mcp-server",
     "Source, https://github.com/agentcommunity/agentcommunity-python",
     "Issues, https://github.com/agentcommunity/agentcommunity-python/issues",
 }
@@ -252,13 +335,22 @@ class OfflineMCPClient:
     ) -> CallToolResult:
         assert read_timeout_seconds == 1.0
         self.calls.append((name, arguments or {}))
-        return CallToolResult(
-            content=[],
-            structured_content={
+        results = {
+            "get_community_stats": {
                 "member_count": 0,
                 "note": "offline artifact check",
             },
-        )
+            "lookup_member": {"status": "not_found", "matches": []},
+            "verify_certificate": {
+                "certificate_id": "invalid",
+                "status": "invalid_format",
+                "valid_format": False,
+                "issued": False,
+                "agent_name": None,
+                "certificate_url": None,
+            },
+        }
+        return CallToolResult(content=[], structured_content=results[name])
 
 
 offline_client = OfflineMCPClient()
@@ -278,20 +370,32 @@ async def verify_offline_behavior() -> None:
     )
     async with client:
         stats = await client.community_stats()
+        lookup = await client.lookup_member("Example Agent")
+        certificate = await client.verify_certificate("invalid")
     assert isinstance(stats, CommunityStats)
     assert stats.member_count == 0
     assert stats.note == "offline artifact check"
+    assert isinstance(lookup, MemberLookup)
+    assert lookup.status == "not_found"
+    assert lookup.matches == ()
+    assert isinstance(certificate, CertificateVerification)
+    assert certificate.status == "invalid_format"
+    assert certificate.valid_format is False
 
 
 asyncio.run(verify_offline_behavior())
 assert offline_client.enter_count == 1
 assert offline_client.exit_count == 1
-assert offline_client.calls == [("get_community_stats", {})]
+assert offline_client.calls == [
+    ("get_community_stats", {}),
+    ("lookup_member", {"query": "Example Agent"}),
+    ("verify_certificate", {"certificate_id": "invalid"}),
+]
 PY
   )
 }
 
-verify_install "$wheel" "$temp_dir/wheel-venv"
-verify_install "$sdist" "$temp_dir/sdist-venv"
+verify_install "$wheel" "$temp_dir/wheel-venv" wheel
+verify_install "$sdist" "$temp_dir/sdist-venv" sdist
 
 echo "verified wheel and sdist: $artifact_dir"

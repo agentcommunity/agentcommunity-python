@@ -8,6 +8,23 @@ from fakes import FakeMCPClient, RecordingClientFactory
 from mcp.types import CallToolResult
 
 
+def _inject_offline_factory(code: str) -> str:
+    constructor = "AgentCommunityClient()"
+    assert code.count(constructor) == 1, (
+        "README main example must contain exactly one injectable default constructor"
+    )
+    return code.replace(
+        constructor,
+        "AgentCommunityClient(_client_factory=readme_test_factory)",
+        1,
+    )
+
+
+def test_readme_injection_fails_closed_when_constructor_target_drifts() -> None:
+    with pytest.raises(AssertionError, match="exactly one injectable"):
+        _inject_offline_factory("AgentCommunityClient(timeout=10.0)")
+
+
 def test_readme_main_example_runs_against_an_offline_transport(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -22,11 +39,7 @@ def test_readme_main_example_runs_against_an_offline_transport(
 
     factory = RecordingClientFactory()
     client = factory.clients
-    code = match.group("code").replace(
-        "AgentCommunityClient()",
-        "AgentCommunityClient(_client_factory=readme_test_factory)",
-        1,
-    )
+    code = _inject_offline_factory(match.group("code"))
 
     original_call = factory
 

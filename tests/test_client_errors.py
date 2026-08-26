@@ -9,6 +9,7 @@ from fakes import (
     error_result,
     successful_result,
 )
+from mcp import MCPError
 from mcp.types import CallToolResult, ImageContent, TextContent
 from pydantic import ValidationError
 
@@ -18,12 +19,26 @@ from agentcommunity import (
     AgentCommunityToolError,
     AgentCommunityTransportError,
 )
+from agentcommunity.client import _safe_tool_error_text
 from agentcommunity.models import CommunityStats
 
 
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"
+
+
+def test_tool_error_scan_stops_as_soon_as_limit_is_reached() -> None:
+    class GuardedText(str):
+        def __iter__(self):  # type: ignore[no-untyped-def]
+            for index, character in enumerate(super().__iter__()):
+                if index == 500:
+                    raise AssertionError("diagnostic scanner read beyond its bound")
+                yield character
+
+    content = [TextContent.model_construct(text=GuardedText("x" * 1_000))]
+
+    assert _safe_tool_error_text(content).endswith("...")
 
 
 @pytest.mark.anyio
@@ -56,7 +71,9 @@ async def test_connection_validation_failure_is_protocol_error_with_cause() -> N
 
 @pytest.mark.anyio
 async def test_tool_transport_failure_is_translated_with_cause() -> None:
+    transport_cause = ConnectionError("stream broke")
     upstream = RuntimeError("MCP stream ended")
+    upstream.__cause__ = transport_cause
     fake = FakeMCPClient()
     fake.call_error = upstream
     client = AgentCommunityClient(_client_factory=RecordingClientFactory(lambda: fake))
@@ -68,6 +85,7 @@ async def test_tool_transport_failure_is_translated_with_cause() -> None:
             await client._call_typed("get_community_stats", {}, CommunityStats)
 
     assert captured.value.__cause__ is upstream
+    assert upstream.__cause__ is transport_cause
 
 
 @pytest.mark.anyio
@@ -117,7 +135,7 @@ async def test_tool_timeout_names_operation_and_duration() -> None:
         ) as captured:
             await client._call_typed("get_community_stats", {}, CommunityStats)
 
-    assert isinstance(captured.value.__cause__, TimeoutError)
+    assert isinstance(captured.value.__cause__, MCPError)
 
 
 @pytest.mark.anyio

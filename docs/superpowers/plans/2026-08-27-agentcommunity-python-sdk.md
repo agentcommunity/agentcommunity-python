@@ -167,6 +167,8 @@ git commit -m "feat: add strict SDK result models"
 - Create: `tests/fakes.py`
 - Create: `tests/test_client_lifecycle.py`
 - Create: `tests/test_client_errors.py`
+- Create: `tests/test_mcp_lifecycle_integration.py`
+- Modify: `pyproject.toml`
 
 ### Step 1: Write failing lifecycle tests
 
@@ -178,7 +180,8 @@ Use a small injected factory/fake at the private transport seam. Test:
 - A connected client supports multiple sequential calls without reconnecting.
 - Calls before enter and after exit raise `AgentCommunityProtocolError`.
 - Re-entering an active instance fails predictably.
-- `close()` is safe and idempotent, including after context exit.
+- `close()` is safe and idempotent before entry and after a completed teardown attempt.
+- Official teardown is unwrapped, runs once, and may exceed the configured connection/call timeout. A failed or cancelled teardown is terminal and is not retried.
 - Cancellation during connect or call propagates as `asyncio.CancelledError` (or the active cancellation class), not a package error.
 
 Keep the injection mechanism private. Tests may import a private constructor/factory seam directly, but it must not appear in `agentcommunity.__all__` or user documentation.
@@ -188,7 +191,8 @@ Keep the injection mechanism private. Tests may import a private constructor/fac
 Test:
 
 - Connection and generic MCP/HTTP failures become `AgentCommunityTransportError` with the original error as `__cause__`.
-- Timeout during connection or tool call becomes `AgentCommunityTransportError` naming the operation and configured timeout, preserving the timeout cause.
+- Timeout during connection or tool call becomes `AgentCommunityTransportError` naming the operation and configured timeout, preserving the upstream timeout cause.
+- Real official-stack tests cover clean lifecycle teardown, stalled initialization cleanup, native per-call timeout with continued connection usability, and advertised output-schema mismatch classification.
 - A tool result with `is_error=True` becomes `AgentCommunityToolError`, retaining bounded safe text from result content.
 - A successful result without `structured_content` becomes `AgentCommunityProtocolError`.
 - A model validation failure becomes `AgentCommunityProtocolError` and preserves the Pydantic validation error as cause.
@@ -196,7 +200,7 @@ Test:
 
 ### Step 3: Run tests to verify failure
 
-Run: `python -m pytest tests/test_client_lifecycle.py tests/test_client_errors.py -q`
+Run: `python -m pytest tests/test_client_lifecycle.py tests/test_client_errors.py tests/test_mcp_lifecycle_integration.py -q`
 
 Expected: FAIL because client/transport do not exist.
 
@@ -205,7 +209,9 @@ Expected: FAIL because client/transport do not exist.
 In `_transport.py`, implement the minimum adapter around `mcp.Client(endpoint)`:
 
 - Own async enter/exit and a single active high-level MCP client.
-- Apply timeout to connect, close, and tool operations using cancellation-safe AnyIO/Python primitives compatible with Python 3.10.
+- Put the connection timeout outside the complete official client context, disable its deadline after connection succeeds, and allow official teardown to finish before exiting that outer scope.
+- Apply tool timeouts through the official high-level client's float `read_timeout_seconds` argument.
+- Do not wrap or retry official teardown. Translate a non-cancellation teardown failure once, mark the instance terminal, and allow cancellation to propagate unchanged.
 - Translate transport failures while never catching `BaseException` or caller cancellation.
 - Call tools using the public MCP SDK API.
 
@@ -226,6 +232,7 @@ Run:
 
 ```bash
 python -m pytest tests/test_client_lifecycle.py tests/test_client_errors.py -q
+python -m pytest tests/test_mcp_lifecycle_integration.py -q
 python -m pytest -q
 python -m ruff check src tests
 python -m ruff format --check src tests
@@ -235,7 +242,7 @@ python -m mypy src tests
 Expected: all pass.
 
 ```bash
-git add src/agentcommunity tests/fakes.py tests/test_client_lifecycle.py tests/test_client_errors.py
+git add pyproject.toml src/agentcommunity tests/fakes.py tests/test_client_lifecycle.py tests/test_client_errors.py tests/test_mcp_lifecycle_integration.py docs/superpowers/specs/2026-08-27-agentcommunity-python-sdk-design.md docs/superpowers/plans/2026-08-27-agentcommunity-python-sdk.md
 git commit -m "feat: add asynchronous MCP client lifecycle"
 ```
 
@@ -273,13 +280,13 @@ Read the pinned fixture and verify:
 
 Avoid a general JSON Schema code generator. The contract tests should clearly identify drift while keeping handwritten public models readable.
 
-### Step 3: Write a failing official-stack integration test
+### Step 3: Complete the official-stack integration coverage
 
 Use the official MCP SDK's supported in-process/local server and client facilities to exercise a deterministic local endpoint through the actual `mcp.Client` code path. Register read-only test implementations of the three supported tools with structured outputs, then prove:
 
 - One client connection performs all three calls.
 - Results become the public typed models.
-- Lifecycle closes cleanly.
+- All three public methods reuse one connection and close cleanly. Task 3 already covers the real-stack lifecycle/timeout mechanics and advertised output-schema mismatch; do not duplicate those lower-level cases here.
 
 Do not call production and do not register the unsafe `register_agent` tool.
 
@@ -422,4 +429,3 @@ After every task has passed its specification and code-quality reviews:
 4. Resolve every Critical and Important finding, rerun affected and full checks, and request re-review when necessary.
 5. Apply `superpowers:verification-before-completion` before claiming success.
 6. Apply `superpowers:finishing-a-development-branch` and present the four integration choices. Do not create a remote, push, open a pull request, configure PyPI, publish, or modify the website without explicit user authorization.
-

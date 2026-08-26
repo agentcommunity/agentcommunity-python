@@ -87,6 +87,7 @@ async def test_context_opens_and_closes_exactly_one_underlying_client() -> None:
         assert factory.clients[0].enter_count == 1
 
     assert factory.endpoints == ["https://agentcommunity.org/mcp"]
+    assert factory.timeouts == [15.0]
     assert factory.clients[0].exit_count == 1
 
 
@@ -108,6 +109,7 @@ async def test_one_connection_supports_multiple_sequential_calls() -> None:
     assert fake.enter_count == 1
     assert fake.exit_count == 1
     assert fake.calls == [("first", {}), ("second", {})]
+    assert fake.call_timeouts == [15.0, 15.0]
 
 
 @pytest.mark.anyio
@@ -179,27 +181,29 @@ async def test_close_is_idempotent_before_and_after_context_exit() -> None:
 
 
 @pytest.mark.anyio
-async def test_close_timeout_retains_connection_for_successful_retry() -> None:
+async def test_close_is_not_limited_by_request_timeout() -> None:
     fake = FakeMCPClient()
-    fake.close_gate = asyncio.Event()
+    close_gate = asyncio.Event()
+    fake.close_gate = close_gate
     client = AgentCommunityClient(
         timeout=0.01, _client_factory=RecordingClientFactory(lambda: fake)
     )
-    await client.__aenter__()
 
-    with pytest.raises(AgentCommunityTransportError, match="close"):
-        await client.close()
+    async def release_close() -> None:
+        await asyncio.sleep(0.03)
+        close_gate.set()
 
-    fake.close_gate.set()
+    async with client:
+        release = asyncio.create_task(release_close())
+    await release
     await client.close()
-    await client.close()
 
-    assert fake.exit_count == 2
+    assert fake.exit_count == 1
     assert fake.successful_exit_count == 1
 
 
 @pytest.mark.anyio
-async def test_close_failure_retains_connection_for_successful_retry() -> None:
+async def test_close_failure_is_terminal_and_subsequent_close_is_noop() -> None:
     upstream = OSError("close failed")
     fake = FakeMCPClient()
     fake.close_error = upstream
@@ -209,25 +213,24 @@ async def test_close_failure_retains_connection_for_successful_retry() -> None:
     with pytest.raises(AgentCommunityTransportError) as captured:
         await client.close()
     assert captured.value.__cause__ is upstream
-    with pytest.raises(AgentCommunityProtocolError, match="failed close"):
+    with pytest.raises(AgentCommunityProtocolError, match="active context"):
         await client._call_typed("get_community_stats", {}, CommunityStats)
 
     fake.close_error = None
     await client.close()
     await client.close()
 
-    assert fake.exit_count == 2
-    assert fake.successful_exit_count == 1
+    assert fake.exit_count == 1
+    assert fake.successful_exit_count == 0
 
 
 @pytest.mark.anyio
-async def test_close_cancellation_retains_connection_for_successful_retry() -> None:
+async def test_close_cancellation_is_terminal_and_subsequent_close_is_noop() -> None:
     fake = FakeMCPClient()
     fake.close_gate = asyncio.Event()
     client = AgentCommunityClient(_client_factory=RecordingClientFactory(lambda: fake))
     entered = asyncio.Event()
     begin_close = asyncio.Event()
-    retry_close = asyncio.Event()
     cancellation_seen = asyncio.Event()
 
     async def own_lifecycle() -> None:
@@ -238,7 +241,6 @@ async def test_close_cancellation_retains_connection_for_successful_retry() -> N
             await client.close()
         except asyncio.CancelledError:
             cancellation_seen.set()
-        await retry_close.wait()
         await client.close()
 
     task = asyncio.create_task(own_lifecycle())
@@ -249,12 +251,10 @@ async def test_close_cancellation_retains_connection_for_successful_retry() -> N
     task.cancel()
     await cancellation_seen.wait()
 
-    fake.close_gate.set()
-    retry_close.set()
     await task
 
-    assert fake.exit_count == 2
-    assert fake.successful_exit_count == 1
+    assert fake.exit_count == 1
+    assert fake.successful_exit_count == 0
 
 
 @pytest.mark.anyio

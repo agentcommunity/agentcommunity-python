@@ -161,6 +161,9 @@ def _safe_tool_error_text(content: list[Any]) -> str:
                 truncated = True
                 break
             output.append(character)
+            if len(output) == _MAX_TOOL_ERROR_TEXT:
+                truncated = True
+                break
         if truncated:
             break
     diagnostic = "".join(output)

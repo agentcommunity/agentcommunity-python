@@ -4,7 +4,8 @@ import asyncio
 from collections.abc import Callable
 from typing import Any
 
-from mcp.types import CallToolResult, TextContent
+from mcp import MCPError
+from mcp.types import REQUEST_TIMEOUT, CallToolResult, TextContent
 
 
 class FakeMCPClient:
@@ -13,6 +14,7 @@ class FakeMCPClient:
         self.exit_count = 0
         self.successful_exit_count = 0
         self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.call_timeouts: list[float | None] = []
         self.connect_error: BaseException | None = None
         self.close_error: BaseException | None = None
         self.call_error: BaseException | None = None
@@ -44,11 +46,23 @@ class FakeMCPClient:
         self.successful_exit_count += 1
 
     async def call_tool(
-        self, name: str, arguments: dict[str, Any] | None = None
+        self,
+        name: str,
+        arguments: dict[str, Any] | None = None,
+        *,
+        read_timeout_seconds: float | None = None,
     ) -> CallToolResult:
         self.calls.append((name, arguments or {}))
+        self.call_timeouts.append(read_timeout_seconds)
         if self.call_gate is not None:
-            await self.call_gate.wait()
+            try:
+                await asyncio.wait_for(
+                    self.call_gate.wait(), timeout=read_timeout_seconds
+                )
+            except TimeoutError as error:
+                raise MCPError(
+                    REQUEST_TIMEOUT, f"Request {name!r} timed out"
+                ) from error
         if self.call_error is not None:
             raise self.call_error
         if self.results:
@@ -60,10 +74,12 @@ class RecordingClientFactory:
     def __init__(self, build: Callable[[], FakeMCPClient] = FakeMCPClient) -> None:
         self._build = build
         self.endpoints: list[str] = []
+        self.timeouts: list[float] = []
         self.clients: list[FakeMCPClient] = []
 
-    def __call__(self, endpoint: str) -> FakeMCPClient:
+    def __call__(self, endpoint: str, timeout: float = 15.0) -> FakeMCPClient:
         self.endpoints.append(endpoint)
+        self.timeouts.append(timeout)
         client = self._build()
         self.clients.append(client)
         return client

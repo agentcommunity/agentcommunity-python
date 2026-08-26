@@ -48,7 +48,7 @@ It exposes exactly these public capability methods in version 0.1:
 - `lookup_member(query: str) -> MemberLookup`
 - `verify_certificate(certificate_id: str) -> CertificateVerification`
 
-The client is an async context manager. One connected instance supports multiple sequential calls. Calls made before entering or after leaving the context fail with a package protocol error. Closing is idempotent. The SDK does not expose its underlying MCP client or session.
+The client is an async context manager. One connected instance supports multiple sequential calls. Calls made before entering or after leaving the context fail with a package protocol error. Closing is idempotent before entry and after a completed teardown attempt. The SDK does not expose its underlying MCP client or session.
 
 Version 0.1 intentionally omits:
 
@@ -66,6 +66,8 @@ The server may advertise additional tools. The SDK must ignore unknown tools and
 ## Transport and lifecycle
 
 The implementation wraps the official MCP Python SDK high-level client, created as `mcp.Client(endpoint)`. It must use the public SDK interface rather than duplicating Streamable HTTP or JSON-RPC behavior.
+
+The configured timeout covers connection/handshake and each tool call. The connection deadline lexically encloses the official client lifecycle so AnyIO cancel scopes remain correctly nested, and it is disabled after connection succeeds. Tool calls use the official client's per-call `read_timeout_seconds` option. Official teardown is deliberately not wrapped in another timeout: it runs once because cancellation can consume cleanup callbacks that cannot safely be retried. A failed or cancelled teardown leaves that SDK instance terminal and non-callable; later `close()` calls are safe no-ops.
 
 For each typed method, the wrapper:
 
@@ -187,7 +189,7 @@ Unit tests cover:
 
 ### MCP integration test
 
-An offline integration test uses the official MCP client stack against a deterministic in-process or local test server. It proves connection lifecycle, tool invocation, and structured-content decoding without reaching production.
+Offline integration tests use the official MCP client stack against deterministic in-process servers. Task 3 exercises the lifecycle/timeout and advertised output-schema boundaries early because mocks cannot model the official stack's persistent AnyIO cancel scopes. Task 4 retains end-to-end coverage of all three public methods and structured-content decoding without reaching production.
 
 ### Contract tests
 

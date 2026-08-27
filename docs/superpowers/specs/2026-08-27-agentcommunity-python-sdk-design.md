@@ -19,8 +19,11 @@ The SDK is also intended to give package registries and agent-readiness scanners
 - License: MIT.
 - Package homepage and project URLs must point to `https://agentcommunity.org` and the official source repository.
 - Runtime dependencies:
+  - `jsonschema>=4.20,<5`
   - `mcp>=2.1.1,<3`
   - `pydantic>=2.12,<3`
+
+`jsonschema` is a direct runtime dependency because protocol-error classification imports `jsonschema.exceptions.ValidationError`. The SDK must declare that import rather than rely on MCP's transitive dependency.
 
 The PyPI name must be checked again immediately before publication. A currently unclaimed name is not a reservation.
 
@@ -48,7 +51,7 @@ It exposes exactly these public capability methods in version 0.1:
 - `lookup_member(query: str) -> MemberLookup`
 - `verify_certificate(certificate_id: str) -> CertificateVerification`
 
-The client is an async context manager. One connected instance supports multiple sequential calls. Calls made before entering or after leaving the context fail with a package protocol error. Closing is idempotent. The SDK does not expose its underlying MCP client or session.
+The client is an async context manager. One connected instance supports multiple sequential calls. Calls made before entering or after leaving the context fail with a package protocol error. Closing is idempotent before entry and after a completed teardown attempt. The SDK does not expose its underlying MCP client or session.
 
 Version 0.1 intentionally omits:
 
@@ -66,6 +69,8 @@ The server may advertise additional tools. The SDK must ignore unknown tools and
 ## Transport and lifecycle
 
 The implementation wraps the official MCP Python SDK high-level client, created as `mcp.Client(endpoint)`. It must use the public SDK interface rather than duplicating Streamable HTTP or JSON-RPC behavior.
+
+The configured timeout covers connection/handshake and each tool call. The connection deadline lexically encloses the official client lifecycle so AnyIO cancel scopes remain correctly nested, and it is disabled after connection succeeds. Tool calls use the official client's per-call `read_timeout_seconds` option. Official teardown is deliberately not wrapped in another timeout: it runs once because cancellation can consume cleanup callbacks that cannot safely be retried. A failed or cancelled teardown leaves that SDK instance terminal and non-callable; later `close()` calls are safe no-ops.
 
 For each typed method, the wrapper:
 
@@ -93,19 +98,38 @@ All exported result models are frozen Pydantic models with strict validation and
 
 ### `CommunityStats`
 
-Represents the complete structured result of `get_community_stats` using the field names and types from the immutable MCP contract fixture.
+Represents the complete structured result of `get_community_stats`:
+
+- `member_count: int`
+- `note: str`
 
 ### `MemberMatch`
 
-Represents one member match from `lookup_member` using the field names and types from the immutable MCP contract fixture.
+Represents one member match from `lookup_member`:
+
+- `display_name: str`
+- `member_since: datetime.date | None`
+- `profile_url: pydantic.AnyUrl`
 
 ### `MemberLookup`
 
-Represents the complete lookup response and contains the normalized query/result metadata and a tuple of `MemberMatch` records, according to the immutable contract fixture.
+Represents the complete lookup response:
+
+- `status: Literal["member", "not_found", "ambiguous"]`
+- `matches: tuple[MemberMatch, ...]`, limited to at most five items
 
 ### `CertificateVerification`
 
-Represents all four public certificate outcomes. Model validation enforces these cross-field invariants:
+Represents all four public certificate outcomes with these fields:
+
+- `certificate_id: str`
+- `status: Literal["invalid_format", "not_found", "issued", "unavailable"]`
+- `valid_format: bool`
+- `issued: bool | None`
+- `agent_name: str | None`
+- `certificate_url: pydantic.AnyUrl | None`
+
+Model validation enforces these cross-field invariants:
 
 | Status | `valid_format` | `issued` | Agent and URL fields |
 |---|---:|---:|---|
@@ -114,7 +138,7 @@ Represents all four public certificate outcomes. Model validation enforces these
 | `issued` | `true` | `true` | present |
 | `unavailable` | `true` | `null` | absent |
 
-The exact field names and URL representation come from the pinned MCP contract, not an inferred example response.
+The field names and URL/date representations come from the pinned MCP contract, not an inferred example response.
 
 ## Error model
 
@@ -168,7 +192,7 @@ Unit tests cover:
 
 ### MCP integration test
 
-An offline integration test uses the official MCP client stack against a deterministic in-process or local test server. It proves connection lifecycle, tool invocation, and structured-content decoding without reaching production.
+Offline integration tests use the official MCP client stack against deterministic in-process servers. Task 3 exercises the lifecycle/timeout and advertised output-schema boundaries early because mocks cannot model the official stack's persistent AnyIO cancel scopes. Task 4 retains end-to-end coverage of all three public methods and structured-content decoding without reaching production.
 
 ### Contract tests
 
@@ -192,6 +216,11 @@ Continuous integration runs:
 - Import and minimal usage checks from a clean wheel environment.
 - Installation and tests from the source distribution.
 - A checked README example smoke test.
+
+Artifact verification receives a separately prepared wheelhouse and performs
+all clean installs with `--no-index`. Registry resolution belongs only to the
+wheelhouse-preparation step; verification fails closed when that input is
+missing or incomplete.
 
 End-to-end tests should avoid dependence on developer credentials or mutable registry state.
 
@@ -218,6 +247,9 @@ Releases use PyPI Trusted Publishing with provenance; no long-lived PyPI token i
 2. Tests those exact artifacts in clean environments.
 3. Publishes the unchanged artifacts after the configured trusted-publisher gate.
 
+Before building, the release workflow requires the Git tag to equal `v` plus
+the exact `project.version` from `pyproject.toml`.
+
 Creating the remote repository, pushing commits, configuring PyPI, and publishing are external state changes and require explicit user authorization. Local implementation can be completed and committed before those gates.
 
 After the package is publicly installed and verified, a separate Agent Community website change may add it to the official package registry and discovery outputs. The website must not advertise an unpublished package. The website change is outside this repository's version 0.1 implementation scope.
@@ -234,4 +266,3 @@ Version 0.1 is ready for publication when:
 - The pinned MCP contract fixture has the approved digest.
 - Release metadata points to the official domain and source repository.
 - No secrets, publication credentials, registration calls, or website advertisement are included.
-

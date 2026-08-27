@@ -59,7 +59,7 @@ class FakeMCPClient:
                 await asyncio.wait_for(
                     self.call_gate.wait(), timeout=read_timeout_seconds
                 )
-            except TimeoutError as error:
+            except asyncio.TimeoutError as error:
                 raise MCPError(
                     REQUEST_TIMEOUT, f"Request {name!r} timed out"
                 ) from error

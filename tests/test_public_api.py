@@ -3,7 +3,10 @@ from __future__ import annotations
 import importlib.metadata
 from pathlib import Path
 
-import tomllib  # type: ignore[import-untyped]
+try:
+    import tomllib  # type: ignore[import-not-found, import-untyped, unused-ignore]
+except ModuleNotFoundError:  # pragma: no cover - exercised on Python 3.10
+    import tomli as tomllib  # type: ignore[import-not-found, unused-ignore]
 
 import agentcommunity
 
